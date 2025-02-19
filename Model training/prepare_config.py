@@ -20,14 +20,7 @@ kpt_shape: [3, 3] # [number of keypoints, number of dim]
 
 # Classes
 names:
-    0: Resistor
-    1: Capacitor
-    2: Inductor
-    3: Transistor_BJT
-    4: Transistor_MOSFET
-    5: Voltage_src
-    6: Current_src
-    7: GND
+    0: Rectangle
 """
 
     # Combine both sections
@@ -43,6 +36,14 @@ names:
 def prepare_paths(project_path):
     """
     Prepares and returns the source and destination paths for the training output.
+    0: Resistor
+    1: Capacitor
+    2: Inductor
+    3: Transistor_BJT
+    4: Transistor_MOSFET
+    5: Voltage_src
+    6: Current_src
+    7: GND
     """
     source_path = os.path.join(project_path, 'runs')
     destination_path = os.path.join(project_path, 'Current trained model')

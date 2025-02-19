@@ -11,8 +11,8 @@ file = minidom.parse('annotations.xml')
 
 # Fixed label mapping for resistor and transistor
 
-label_mapping = { "Resistor": 0, "Capacitor": 1, "Inductor": 2, "Transistor_BJT": 3, "Transistor_MOSFET": 4, "Voltage_src": 5, "Current_src": 6, "GND": 7}
-label_counter = 7
+label_mapping = {"Rectangle": 0}
+label_counter = 0
 
 # Processing each image
 images = file.getElementsByTagName('image')
