@@ -1,101 +1,141 @@
+import os
 import cv2
 import numpy as np
-import torch
-import matplotlib.pyplot as plt
 from ultralytics import YOLO
 
-# **載入 YOLOv8 訓練的模型**
-model = YOLO("yolov8m-pose.pt")  # 替換成你的模型
+# Function to detect pins by scanning along the edges
+def detect_pins(image, bbox, expand_pixels=5):
+    x_min, y_min, x_max, y_max = bbox
 
-# **讀取電路圖**
-image_path = "./Model test results/circuit001.png"  # 你的電路圖
-image = cv2.imread(image_path)
+    # Expand the bounding box
+    x_min = max(0, x_min - expand_pixels)
+    y_min = max(0, y_min - expand_pixels)
+    x_max = min(image.shape[1], x_max + expand_pixels)
+    y_max = min(image.shape[0], y_max + expand_pixels)
 
-if image is None:
-    raise FileNotFoundError("找不到圖片，請確認 image_path 是否正確")
+    # Crop the component region
+    component = image[y_min:y_max, x_min:x_max]
 
-# **用 YOLO 偵測 Bounding Boxes**
-results = model(image)
-bboxes = results[0].boxes.xyxy.cpu().numpy()  # 取得 YOLO 偵測到的 bounding boxes
+    # Convert to grayscale
+    gray = cv2.cvtColor(component, cv2.COLOR_BGR2GRAY)
+    
+    # Apply Gaussian blur to reduce noise
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-print(f"YOLO 偵測到 {len(bboxes)} 個元件")
+    # Apply adaptive thresholding
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
 
+    # Store pin locations for each edge
+    top_pins = []     # Pins on the top edge
+    bottom_pins = []  # Pins on the bottom edge
+    left_pins = []    # Pins on the left edge
+    right_pins = []   # Pins on the right edge
 
-# **函數：擴展 Bounding Box**
-def expand_bbox(bbox, image_shape, expand_ratio=1.2):
-    img_h, img_w = image_shape[:2]
-    x_min, y_min, x_max, y_max = map(int, bbox)
+    # Scan the top edge (check first 3 rows)
+    for x in range(binary.shape[1]):
+        for y in range(3):  # Check first 3 rows
+            if binary[y, x] == 255:
+                top_pins.append((x_min + x, y_min + y))
+                break  # Stop after finding the first pin in this column
 
-    # 計算擴展大小
-    width, height = x_max - x_min, y_max - y_min
-    expand_x = int(width * (expand_ratio - 1) / 2)
-    expand_y = int(height * (expand_ratio - 1) / 2)
+    # Scan the bottom edge (check last 3 rows)
+    for x in range(binary.shape[1]):
+        for y in range(binary.shape[0] - 3, binary.shape[0]):  # Check last 3 rows
+            if binary[y, x] == 255:
+                bottom_pins.append((x_min + x, y_min + y))
+                break  # Stop after finding the first pin in this column
 
-    # 擴展 Bounding Box，確保不超過圖片邊界
-    x_min = max(x_min - expand_x, 0)
-    y_min = max(y_min - expand_y, 0)
-    x_max = min(x_max + expand_x, img_w - 1)
-    y_max = min(y_max + expand_y, img_h - 1)
+    # Scan the left edge (check first 3 columns)
+    for y in range(binary.shape[0]):
+        for x in range(3):  # Check first 3 columns
+            if binary[y, x] == 255:
+                left_pins.append((x_min + x, y_min + y))
+                break  # Stop after finding the first pin in this row
 
-    return (x_min, y_min, x_max, y_max)
+    # Scan the right edge (check last 3 columns)
+    for y in range(binary.shape[0]):
+        for x in range(binary.shape[1] - 3, binary.shape[1]):  # Check last 3 columns
+            if binary[y, x] == 255:
+                right_pins.append((x_min + x, y_min + y))
+                break  # Stop after finding the first pin in this row
 
+    return top_pins, bottom_pins, left_pins, right_pins
 
-# **函數：Edge Detection + Pin Extraction**
-def extract_pin_points(image, bbox, expand_ratio=1.5):
-    """
-    依據 YOLO 偵測的 Bounding Box 提取感興趣區域（ROI），
-    並使用 Edge Detection 找出 Pin Point。
-    """
-    # **擴展 Bounding Box**
-    x_min, y_min, x_max, y_max = expand_bbox(bbox, image.shape, expand_ratio)
+# Function for processing all images
+def process_all_images():
+    # Define the image folder path dynamically
+    image_folder = os.path.join(PARENT_PATH, 'Model test/Test images')
 
-    # **提取 ROI**
-    roi = image[y_min:y_max, x_min:x_max]
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    # Define the output folder for processed images
+    output_folder = os.path.join(PARENT_PATH, 'Model test/Model test results')
+    os.makedirs(output_folder, exist_ok=True)  # Create the output folder if it doesn't exist
 
-    # **去雜訊**
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    # Load YOLO model
+    pose_folder = os.path.join(PROJECT_PATH, 'Current trained model/pose')
+    train_folders = [folder for folder in os.listdir(pose_folder) if folder.startswith('train')]
 
-    # **Canny 邊緣偵測**
-    edges = cv2.Canny(blurred, 50, 150)
+    # Check if there are train folders
+    if not train_folders:
+        raise FileNotFoundError("No 'train' folders found in the pose directory.")
 
-    # **尋找輪廓**
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Determine the latest train folder
+    def extract_suffix(folder_name):
+        if folder_name == "train":
+            return 0
+        else:
+            return int(folder_name[5:])  # Extract the numeric suffix from folder names like 'train1', 'train2', etc.
 
-    # **初始化 Pin Points**
-    pin_points = []
+    latest_train_folder = max(train_folders, key=extract_suffix)
+    latest_train_path = os.path.join(pose_folder, latest_train_folder, 'weights', 'last.pt')
 
-    # **篩選輪廓**
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if 5 < area < 100:  # 過濾掉太小或太大的雜訊
-            M = cv2.moments(contour)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"]) + x_min
-                cy = int(M["m01"] / M["m00"]) + y_min
-                pin_points.append((cx, cy))
+    print(f"Loading model from: {latest_train_path}")
+    model = YOLO(latest_train_path)
 
-    return pin_points
+    # Get a list of all image files in the folder
+    image_files = [f for f in os.listdir(image_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
 
+    # Process and save each image
+    for image_file in image_files:
+        image_path = os.path.join(image_folder, image_file)
 
-# **畫出 YOLO 偵測框，並對每個框找 Pin Point**
-plt.figure(figsize=(10, 6))
-plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-plt.title("YOLO 偵測元件 + Pin Points")
+        # Load image
+        img = cv2.imread(image_path)
 
-for bbox in bboxes:
-    # **擴展 Bounding Box**
-    x_min, y_min, x_max, y_max = expand_bbox(bbox, image.shape, expand_ratio=1.3)  # 設定擴展比例
+        # Run inference using YOLO
+        results = model(image_path)[0]
 
-    # **畫擴展後的 Bounding Box**
-    plt.gca().add_patch(plt.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min, 
-                                      linewidth=2, edgecolor="green", facecolor="none"))
+        # Process each result
+        for result in results:
+            for cls, keypoints, bbox in zip(result.boxes.cls.cpu().numpy(),
+                                             result.keypoints.xy.cpu().numpy(),
+                                             result.boxes.xyxy.cpu().numpy()):
+                class_idx = int(cls)
+                object_name = results.names[class_idx]  # Get the class name from the model
 
-    # **找出 Pin Points**
-    pin_points = extract_pin_points(image, bbox, expand_ratio=1.3)
+                # Extract bounding box coordinates
+                x_min, y_min, x_max, y_max = map(int, bbox)
 
-    # **畫出 Pin Points**
-    for (px, py) in pin_points:
-        plt.scatter(px, py, color="red", s=40)  # 紅色圓點標記 Pin
+                # Draw bounding box (without label)
+                cv2.rectangle(img, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)  # Draw bounding box in blue
 
-plt.show()
+                # Detect pins using edge scanning
+                top_pins, bottom_pins, left_pins, right_pins = detect_pins(img, (x_min, y_min, x_max, y_max), expand_pixels=7)
+
+                # Draw detected pins (all in green)
+                for pin in top_pins + bottom_pins + left_pins + right_pins:
+                    cv2.circle(img, pin, radius=4, color=(0, 255, 0), thickness=-1)  # Draw pins in green
+
+        # Save the processed image to the output folder
+        output_image_path = os.path.join(output_folder, image_file)
+        cv2.imwrite(output_image_path, img)
+        print(f"Processed image saved to: {output_image_path}")
+
+# Main function
+if __name__ == '__main__':
+    # Get the current working directory and define the project root
+    current_dir = os.getcwd()
+    PARENT_PATH = os.path.dirname(current_dir)  # Parent path is one level up
+    PROJECT_PATH = os.path.dirname(os.path.dirname(current_dir))  # Project path is two levels up
+
+    # Process all images
+    process_all_images()
